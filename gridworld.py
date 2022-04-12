@@ -7,6 +7,8 @@ matthew.alger@anu.edu.au
 
 import numpy as np
 import numpy.random as rn
+import pulp as pulp
+import matplotlib.pyplot as plt
 
 class Gridworld(object):
     """
@@ -91,7 +93,7 @@ class Gridworld(object):
         -> (x, y) int tuple.
         """
 
-        return (i % self.grid_size, i // self.grid_size)
+        return (int(i % self.grid_size), int(i // self.grid_size))
 
     def point_to_int(self, p):
         """
@@ -294,10 +296,127 @@ class Gridworld(object):
         """
         Args:
             N:numver of schedules
+        Generate N (src,dst) pairs
         """
-        src = np.random.randint(1,self.grid_size,size =(n_schedules,2))
-        dst = np.random.randint(1,self.grid_size,size =(n_schedules,2))
-        return src,dst
-    def get_path(src,dst,):
+        n=0
+        src = np.zeros([n_schedules,2])
+        dst = np.zeros([n_schedules,2])
+        while n < n_schedules:
+            src_t = np.random.randint(0,self.grid_size,size =(1,2))
+            dst_t = np.random.randint(0,self.grid_size,size =(1,2))
+            if not np.array_equal(src_t,dst_t):
+                src[n] = src_t
+                dst[n] = dst_t
+                n+=1
+        return src.astype(int),dst.astype(int)
+
+    def is_valid_cell(self,x, y):
+        if x < 0 or y < 0 or x >= self.grid_size or y >= self.grid_size:
+            return False
+
+        return True
+
+    def find_paths_util(self,source, destination, visited, path, paths,max_path_length):
+
+        if np.array_equal(source, destination):
+            paths.append(path[:])  # append copy of current path
+            return
+
+          # mark current cell as visited
+        N = self.grid_size
+        if len(path) > max_path_length:
+            return
+        x, y = source
+        visited[x][y] = True
+          # if current cell is a valid and open cell, 
+        if self.is_valid_cell(x, y):
+            # Using Breadth First Search on path extension in all direction
+
+            # go right (x, y) --> (x + 1, y)
+            if x + 1 < N and (not visited[x + 1][y]):
+                path.append(self.point_to_int((x + 1, y)))
+                self.find_paths_util((x + 1, y), destination, visited, path, paths,max_path_length)
+                path.pop()
+
+            # go left (x, y) --> (x - 1, y)
+            if x - 1 >= 0 and (not visited[x - 1][y]):
+                path.append(self.point_to_int((x - 1, y)))
+                self.find_paths_util((x - 1, y), destination, visited, path, paths,max_path_length)
+                path.pop()
+            # go up (x, y) --> (x, y + 1)
+            if y + 1 < N and (not visited[x][y + 1]):
+                path.append(self.point_to_int((x, y + 1)))
+                self.find_paths_util((x, y + 1), destination, visited, path, paths,max_path_length)
+                path.pop()
+
+            # go down (x, y) --> (x, y - 1)
+            if y - 1 >= 0 and (not visited[x][y - 1]):
+                path.append(self.point_to_int((x, y - 1)))
+                self.find_paths_util((x, y - 1), destination, visited, path, paths,max_path_length)
+                path.pop()
+
+        # Unmark current cell as visited
+        visited[x][y] = False
+    
+        return paths
+    def find_paths(self,source, destination):
+        """ Sets up and searches for paths"""
+        N = self.grid_size # size of Maze is N x N
+
+        # 2D matrix to keep track of cells involved in current path
+        visited = np.full((N,N),False)
+
+        path = [self.point_to_int(source)]
+        paths = []
+        paths = self.find_paths_util(source, destination, visited, path, paths, 2 * (self.grid_size-1) )
+        return paths
+    def paths_to_vector(self,paths):
+        vec = np.zeros((len(paths),(self.grid_size**2)))
+        for j in range(len(paths)):
+            for i in range(len(paths[j])):
+                vec[j,paths[j][i]] = 1
+        return vec
+    def solve_congestion_prob(self,src,dst,n_schedules,capacity_map):
+        paths = []
+        vec = []
+        for i in range(n_schedules):
+            paths.append(self.find_paths(src[i], dst[i]))
+            vec.append(self.paths_to_vector(paths[i]))
+        my_lp_problem = pulp.LpProblem("My LP Problem", pulp.LpMinimize)
+        x = pulp.LpVariable.dicts('x', ((i,j) for i in range(n_schedules) for j in range(200)), cat='Binary')
+        C = pulp.LpVariable('C', lowBound=0 , cat='Integer')
+        my_lp_problem += C
+        for k in range(n_schedules):
+            my_lp_problem += pulp.lpSum(x[k,i] for i in range(len(vec[k]))) ==1
+        for j in range(self.grid_size ** 2):
+            my_lp_problem += pulp.lpSum(pulp.lpSum(x[k,i]*vec[k][i,j]
+for i in range(vec[k].shape[0]))for k in range(n_schedules)) <= C + capacity_map[j]
+        my_lp_problem.solve()
         
-        return P
+        print(pulp.value(my_lp_problem.objective))
+        x_sol = np.array([[x[i,j].varValue for j in range(200)]for i in range(n_schedules)])
+        path_sol = []
+        for k in range(n_schedules):
+            for i in range(len(vec[k])):
+                if x_sol[k][i]!=0:
+                    path_sol.append(np.multiply(x_sol[k][i],paths[k][i]))
+        path_sol = np.array(path_sol,dtype = object)
+        path_sol_point = []
+        for i in range(len(path_sol)):
+            temp = []
+            for j in range(len(path_sol[i])):
+                temp.append(self.int_to_point(path_sol[i][j]))
+            path_sol_point.append(temp)
+        path_sol_point = np.array(path_sol_point,dtype = object)
+        return path_sol_point,path_sol
+
+    def generate_capacity_map(self,low,mid,high):
+        capacity_map = np.zeros((5,5))
+        capacity_map[2,2] = high
+        for (i,j) in [[1,1],[1,2],[1,3],[2,1],[2,3],[3,1],[3,2],[3,3]]:
+            capacity_map[i,j] = mid
+        
+        for (i,j) in [[0,0],[0,1],[0,2],[0,3],[0,4],[2,0],[2,4],[3,0],[3,4],[4,0],[4,1],[4,2],[4,3],[4,4],[1,0],[1,4]]:
+            capacity_map[i,j] = low
+        return capacity_map.flatten()
+    
